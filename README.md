@@ -31,7 +31,7 @@ Chrome extension (content.js)  -->  background.js  -->  Flask API (/predict)
 
 ```
 .
-├── FakeNewsDetection.py   # train models, run the API server, CLI prediction
+├── FakeNewsDetection.py   # train models (logged to MLflow), run the API server, CLI prediction
 ├── signals.py             # combines the signals into a verdict + agreement status
 ├── source_check.py        # website / source verification
 ├── text_checks.py         # selection validity and "does this look like news?" checks
@@ -79,6 +79,8 @@ python FakeNewsDetection.py train --csv FakeNews.csv
 
 Add `--no-plots` to skip the charts. The trained models are saved to `saved_models/`. To see the saved accuracies afterwards, run `python show_accuracy.py`.
 
+Each training run is also recorded with MLflow (settings, accuracies, charts). See [Experiment Tracking](#experiment-tracking-mlflow) below.
+
 ### 3. Start the API server
 
 ```bash
@@ -101,6 +103,37 @@ The server runs at `http://127.0.0.1:5000`. Keep this terminal open while you us
 python FakeNewsDetection.py predict --text "paste some news text here" --url reuters.com
 ```
 
+## Experiment Tracking (MLflow)
+
+Every training run is recorded with [MLflow](https://mlflow.org/), so you can compare runs and see which settings gave the best results. Records are stored locally in `mlflow.db` and `mlruns/`, which are not uploaded to GitHub.
+
+**What is recorded for each run**
+
+- **Settings:** TF-IDF `max_df`, LSTM epochs and batch size, vocabulary size, sequence length, number of Random Forest trees, dataset name and row count.
+- **Results:** accuracy and F1 score for Logistic Regression, Naive Bayes, Random Forest and LSTM, plus the LSTM loss and accuracy after every epoch.
+- **Charts:** a confusion matrix image for each of the four models.
+
+**View the results**
+
+1. Train at least once (see "How to Run", step 2).
+2. From the project folder, with the virtual environment active, run:
+
+   ```bash
+   mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5001
+   ```
+
+3. Open **http://127.0.0.1:5001** in your browser (port 5001 avoids a clash with the API server on port 5000).
+4. Click **Model training** in the top left of the sidebar (not GenAI), then open the experiment **fake-news-detection**. Each training run is one row in the **Runs** table.
+5. Use the **Columns** button to show the settings and accuracies as table columns.
+6. Click a run name to see its details:
+   - **Overview:** all settings and final metrics.
+   - **Model metrics:** LSTM loss and accuracy curves per epoch.
+   - **Artifacts:** the confusion matrix images in the `confusion_matrices` folder.
+
+**Compare runs**
+
+Change one setting in `FakeNewsDetection.py` (for example `LSTM_EPOCHS = 10` inside `_train()`), train again, refresh the MLflow page, tick both runs and use the chart or compare view.
+
 ## Customising the Source List
 
 `source_check.py` ships with a small **starter** list. It is not an authoritative rating. To add or override sites, create a `sources_custom.json` file in the project folder:
@@ -121,6 +154,8 @@ Allowed categories: `reliable`, `unreliable`, `satire`, `social`.
 | Scan button doesn't appear | Reload the extension on `chrome://extensions`, then refresh the web page. Select at least a few words of English text. |
 | "Cannot reach the local server" | Start the API with `python FakeNewsDetection.py serve`. |
 | "No saved models found" | Run the training step first. |
+| MLflow shows "No data available" | You are on the GenAI tab. Click **Model training** in the sidebar, then **Runs**. |
+| MLflow shows no runs | Start `mlflow ui` from the same folder where you ran training, so it reads the same `mlflow.db`. |
 | Extension doesn't work on some pages | Chrome blocks extensions on `chrome://` pages and the Chrome Web Store. |
 
 ## Limitations
