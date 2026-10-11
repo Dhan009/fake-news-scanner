@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Fake News Scanner",
+  "version": "2.0",
+  "description": "Select news text on any page and see how likely it is to be fake, plus a check of the source website.",
+  "permissions": [],
+  "host_permissions": ["http://127.0.0.1:5000/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["content.js"], "css": ["content.css"] }
+  ]
+}

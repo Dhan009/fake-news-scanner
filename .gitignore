@@ -1,0 +1,20 @@
+venv/
+__pycache__/
+*.pyc
+archive/
+Fake.csv
+True.csv
+FakeNews.csv
+saved_models/
+
+# model files, in case they end up outside saved_models
+*.keras
+*.joblib
+*.pkl
+
+# editor / system / secrets
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.env

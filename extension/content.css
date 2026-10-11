@@ -1,0 +1,22 @@
+#fns-btn, #fns-card { all: initial; font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+#fns-btn {
+  position: fixed; z-index: 2147483647; cursor: pointer;
+  background: #1a73e8; color: #fff; font-size: 13px; padding: 6px 10px;
+  border-radius: 16px; box-shadow: 0 2px 8px rgba(0,0,0,.3);
+}
+#fns-card {
+  position: fixed; z-index: 2147483647; width: 320px; box-sizing: border-box;
+  background: #fff; color: #202124; border-radius: 10px; padding: 14px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.35); font-size: 13px; line-height: 1.4;
+  max-height: calc(100vh - 16px); overflow-y: auto;
+}
+#fns-card .fns-close { position: absolute; top: 6px; right: 10px; cursor: pointer; font-size: 16px; color: #666; }
+#fns-card .fns-verdict { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+#fns-card .fns-bar { height: 14px; background: #e0e0e0; border-radius: 7px; overflow: hidden; margin: 6px 0; }
+#fns-card .fns-fill { height: 100%; }
+#fns-card .fns-row { display: flex; justify-content: space-between; margin: 3px 0; }
+#fns-card .fns-warn { margin-top: 8px; padding: 6px; background: #fff4e5; border-radius: 6px; color: #8a5300; font-size: 12px; }
+#fns-card .fns-small { color: #666; font-size: 11px; margin-top: 8px; }
+#fns-card .fns-section { margin-top: 10px; padding-top: 8px; border-top: 1px solid #e6e6e6; font-weight: 600; }
+#fns-card .fns-src { margin-top: 6px; padding: 6px; border-radius: 6px; background: #f3f4f6; font-size: 12px; }
+#fns-card .fns-hl { max-height: 180px; overflow-y: auto; margin-top: 6px; padding: 6px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; line-height: 1.5; }
