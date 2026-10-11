@@ -70,7 +70,8 @@ def _train(csv_path, show_plots=True):
     import nltk
     from sklearn.model_selection import train_test_split
     from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
+    from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
+                             confusion_matrix, classification_report)
     from sklearn.linear_model import LogisticRegression
     from sklearn.naive_bayes import MultinomialNB
     from sklearn.ensemble import RandomForestClassifier
@@ -141,8 +142,12 @@ def _train(csv_path, show_plots=True):
         print(classification_report(y_test, y_pred))
 
         key = name.lower().replace(" ", "_")
-        mlflow.log_metric(key + "_accuracy", acc)
-        mlflow.log_metric(key + "_f1", f1_score(y_test, y_pred))
+        mlflow.log_metrics({
+            key + "_accuracy": acc,
+            key + "_precision": precision_score(y_test, y_pred),
+            key + "_recall": recall_score(y_test, y_pred),
+            key + "_f1": f1_score(y_test, y_pred),
+        })
         save_confusion(y_test, y_pred, name)
 
     # ---- LSTM
@@ -169,8 +174,12 @@ def _train(csv_path, show_plots=True):
     print(f"\nLSTM Accuracy: {acc_lstm:.4f}")
     print(classification_report(y_test, y_pred_lstm))
 
-    mlflow.log_metric("lstm_accuracy", acc_lstm)
-    mlflow.log_metric("lstm_f1", f1_score(y_test, y_pred_lstm))
+    mlflow.log_metrics({
+        "lstm_accuracy": acc_lstm,
+        "lstm_precision": precision_score(y_test, y_pred_lstm),
+        "lstm_recall": recall_score(y_test, y_pred_lstm),
+        "lstm_f1": f1_score(y_test, y_pred_lstm),
+    })
     for epoch, (tl, vl, ta, va) in enumerate(zip(history.history['loss'], history.history['val_loss'],
                                                  history.history['accuracy'], history.history['val_accuracy'])):
         mlflow.log_metrics({"lstm_train_loss": tl, "lstm_val_loss": vl,
