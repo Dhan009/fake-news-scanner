@@ -19,12 +19,16 @@ import argparse
 import numpy as np
 import pandas as pd
 import joblib
+import mlflow
 
 from text_checks import check_text_usable, news_likeness, MAX_CHARS
 from source_check import verify_source
 from signals import assess_signals
 
 MODEL_DIR = "saved_models"
+MLFLOW_URI = "sqlite:///mlflow.db"      # experiment records are stored in this file
+MLFLOW_EXPERIMENT = "fake-news-detection"
+PLOTS_DIR = "plots"                      # confusion matrices are saved here before logging
 MAX_WORDS = 10000      # LSTM vocabulary size
 MAX_LEN = 200          # LSTM sequence length
 MIN_WORDS_FOR_RELIABLE = 40   # shorter text -> low-confidence warning
@@ -49,12 +53,24 @@ def clean_text(text):
 # TRAINING
 # ==============================
 def train(csv_path, show_plots=True):
+    """Train all models. Every run is recorded in MLflow (settings, accuracies, charts)."""
+    mlflow.set_tracking_uri(MLFLOW_URI)
+    mlflow.set_experiment(MLFLOW_EXPERIMENT)
+    with mlflow.start_run():
+        _train(csv_path, show_plots)
+        print("\nExperiment logged. To view it run:  mlflow ui --backend-store-uri " + MLFLOW_URI)
+
+
+def _train(csv_path, show_plots=True):
+    import matplotlib
+    if not show_plots:
+        matplotlib.use("Agg")        # no windows needed, we only save the pictures
     import matplotlib.pyplot as plt
     import seaborn as sns
     import nltk
     from sklearn.model_selection import train_test_split
     from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+    from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
     from sklearn.linear_model import LogisticRegression
     from sklearn.naive_bayes import MultinomialNB
     from sklearn.ensemble import RandomForestClassifier
@@ -65,27 +81,54 @@ def train(csv_path, show_plots=True):
 
     nltk.download('stopwords', quiet=True)
     os.makedirs(MODEL_DIR, exist_ok=True)
+    os.makedirs(PLOTS_DIR, exist_ok=True)
+
+    # ---- settings of this run (hyperparameters)
+    TEST_SIZE, MAX_DF = 0.2, 0.7
+    LSTM_EPOCHS, LSTM_BATCH = 5, 64
+    LR_MAX_ITER, RF_TREES = 1000, 100
+    mlflow.log_params({
+        "test_size": TEST_SIZE, "tfidf_max_df": MAX_DF,
+        "lstm_epochs": LSTM_EPOCHS, "lstm_batch_size": LSTM_BATCH,
+        "lstm_vocab_size": MAX_WORDS, "lstm_sequence_length": MAX_LEN,
+        "logreg_max_iter": LR_MAX_ITER, "rf_n_estimators": RF_TREES,
+        "dataset_file": os.path.basename(csv_path),
+    })
+
+    def save_confusion(y_true, y_pred, name):
+        """Draw the confusion matrix, save it, attach it to the MLflow run."""
+        plt.figure()
+        sns.heatmap(confusion_matrix(y_true, y_pred), annot=True, fmt='d', cmap='Blues')
+        plt.title(f'Confusion Matrix: {name}')
+        plt.xlabel('Predicted'); plt.ylabel('Actual')
+        path = os.path.join(PLOTS_DIR, "confusion_" + name.replace(" ", "_") + ".png")
+        plt.savefig(path, bbox_inches="tight")
+        mlflow.log_artifact(path, artifact_path="confusion_matrices")
+        if show_plots:
+            plt.show()
+        plt.close()
 
     # ---- Load dataset (label: 0 = Real, 1 = Fake)
     df = pd.read_csv(csv_path)
     df = df[['text', 'label']].dropna()
     df['text'] = df['text'].apply(clean_text)
     df = df[df['text'].str.len() > 0]
+    mlflow.log_param("dataset_rows", len(df))
 
     X, y = df['text'], df['label'].astype(int)
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X, y, test_size=TEST_SIZE, random_state=42, stratify=y
     )
 
     # ---- Traditional ML models
-    tfidf = TfidfVectorizer(stop_words='english', max_df=0.7)
+    tfidf = TfidfVectorizer(stop_words='english', max_df=MAX_DF)
     X_train_tfidf = tfidf.fit_transform(X_train)
     X_test_tfidf = tfidf.transform(X_test)
 
     models = {
-        "Logistic Regression": LogisticRegression(max_iter=1000),
+        "Logistic Regression": LogisticRegression(max_iter=LR_MAX_ITER),
         "Naive Bayes": MultinomialNB(),
-        "Random Forest": RandomForestClassifier(n_estimators=100, n_jobs=-1, random_state=42),
+        "Random Forest": RandomForestClassifier(n_estimators=RF_TREES, n_jobs=-1, random_state=42),
     }
 
     results = {}
@@ -97,11 +140,10 @@ def train(csv_path, show_plots=True):
         print(f"\n{name} Accuracy: {acc:.4f}")
         print(classification_report(y_test, y_pred))
 
-        if show_plots:
-            sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, fmt='d', cmap='Blues')
-            plt.title(f'Confusion Matrix: {name}')
-            plt.xlabel('Predicted'); plt.ylabel('Actual')
-            plt.show()
+        key = name.lower().replace(" ", "_")
+        mlflow.log_metric(key + "_accuracy", acc)
+        mlflow.log_metric(key + "_f1", f1_score(y_test, y_pred))
+        save_confusion(y_test, y_pred, name)
 
     # ---- LSTM
     tokenizer = Tokenizer(num_words=MAX_WORDS)
@@ -118,7 +160,7 @@ def train(csv_path, show_plots=True):
 
     history = lstm_model.fit(
         X_train_pad, y_train.values,
-        epochs=5, batch_size=64, validation_split=0.1
+        epochs=LSTM_EPOCHS, batch_size=LSTM_BATCH, validation_split=0.1
     )
 
     y_pred_lstm = (lstm_model.predict(X_test_pad) > 0.5).astype("int32")
@@ -127,11 +169,15 @@ def train(csv_path, show_plots=True):
     print(f"\nLSTM Accuracy: {acc_lstm:.4f}")
     print(classification_report(y_test, y_pred_lstm))
 
-    if show_plots:
-        sns.heatmap(confusion_matrix(y_test, y_pred_lstm), annot=True, fmt='d', cmap='Blues')
-        plt.title('Confusion Matrix: LSTM'); plt.xlabel('Predicted'); plt.ylabel('Actual')
-        plt.show()
+    mlflow.log_metric("lstm_accuracy", acc_lstm)
+    mlflow.log_metric("lstm_f1", f1_score(y_test, y_pred_lstm))
+    for epoch, (tl, vl, ta, va) in enumerate(zip(history.history['loss'], history.history['val_loss'],
+                                                 history.history['accuracy'], history.history['val_accuracy'])):
+        mlflow.log_metrics({"lstm_train_loss": tl, "lstm_val_loss": vl,
+                            "lstm_train_acc": ta, "lstm_val_acc": va}, step=epoch)
+    save_confusion(y_test, y_pred_lstm, "LSTM")
 
+    if show_plots:
         plt.figure(figsize=(8, 5))
         sns.barplot(x=list(results.keys()), y=list(results.values()))
         plt.title('Model Accuracy Comparison'); plt.ylim(0, 1); plt.show()

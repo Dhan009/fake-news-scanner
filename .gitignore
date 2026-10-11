@@ -18,3 +18,7 @@ saved_models/
 .DS_Store
 Thumbs.db
 .env
+
+mlflow.db
+mlruns/
+plots/

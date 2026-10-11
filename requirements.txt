@@ -7,3 +7,4 @@ nltk
 tensorflow
 flask
 joblib
+mlflow
