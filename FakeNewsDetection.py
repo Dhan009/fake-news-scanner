@@ -1,11 +1,17 @@
+# Fake News Detection using AI (+ live "select & scan" API)
 # ==========================================================
-# Fake News Detection using AI  (+ live "select & scan" API)
-# ==========================================================
+# Models: calibrated TF-IDF Logistic Regression, Naive Bayes, Random Forest,
+# Linear SVM, plus an LSTM with a separately fitted sigmoid calibrator.
+# Dataset CSV columns: text,label where 0 = Real and 1 = Fake.
+#
 # Usage:
 #   pip install -r requirements.txt
-#   python FakeNewsDetection.py train --csv FakeNews.csv      # train + save models
-#   python FakeNewsDetection.py serve                         # start API for the browser extension
-#   python FakeNewsDetection.py predict --text "some news"    # quick test from terminal
+#   python FakeNewsDetection.py train --csv FakeNews.csv --no-plots
+#   python FakeNewsDetection.py serve
+#   python FakeNewsDetection.py predict --text "some news"
+#
+# After changing this file, retrain before starting the API. This version
+# creates new saved model files in ./saved_models.
 # ==========================================================
 
 import os
@@ -70,11 +76,15 @@ def _train(csv_path, show_plots=True):
     import nltk
     from sklearn.model_selection import train_test_split
     from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.metrics import (accuracy_score, precision_score, recall_score, f1_score,
-                             confusion_matrix, classification_report)
+    from sklearn.metrics import (
+        accuracy_score, precision_score, recall_score, f1_score,
+        confusion_matrix, classification_report, brier_score_loss, log_loss,
+    )
     from sklearn.linear_model import LogisticRegression
     from sklearn.naive_bayes import MultinomialNB
     from sklearn.ensemble import RandomForestClassifier
+    from sklearn.svm import LinearSVC
+    from sklearn.calibration import CalibratedClassifierCV
     from tensorflow.keras.preprocessing.text import Tokenizer
     from tensorflow.keras.preprocessing.sequence import pad_sequences
     from tensorflow.keras.models import Sequential
@@ -85,14 +95,17 @@ def _train(csv_path, show_plots=True):
     os.makedirs(PLOTS_DIR, exist_ok=True)
 
     # ---- settings of this run (hyperparameters)
-    TEST_SIZE, MAX_DF = 0.2, 0.7
+    TEST_SIZE, CALIBRATION_SIZE, MAX_DF = 0.2, 0.25, 0.7
     LSTM_EPOCHS, LSTM_BATCH = 5, 64
     LR_MAX_ITER, RF_TREES = 1000, 100
     mlflow.log_params({
-        "test_size": TEST_SIZE, "tfidf_max_df": MAX_DF,
+        "test_size": TEST_SIZE,
+        "calibration_fraction_of_development_data": CALIBRATION_SIZE,
+        "tfidf_max_df": MAX_DF,
         "lstm_epochs": LSTM_EPOCHS, "lstm_batch_size": LSTM_BATCH,
         "lstm_vocab_size": MAX_WORDS, "lstm_sequence_length": MAX_LEN,
         "logreg_max_iter": LR_MAX_ITER, "rf_n_estimators": RF_TREES,
+        "calibration_method": "sigmoid",
         "dataset_file": os.path.basename(csv_path),
     })
 
@@ -117,43 +130,77 @@ def _train(csv_path, show_plots=True):
     mlflow.log_param("dataset_rows", len(df))
 
     X, y = df['text'], df['label'].astype(int)
-    X_train, X_test, y_train, y_test = train_test_split(
+    if set(y.unique()) != {0, 1}:
+        raise ValueError("The dataset must use label 0 = Real and label 1 = Fake, and contain both labels.")
+
+    # Keep the final test set untouched until evaluation. Split the remaining
+    # development data into model-training and calibration subsets.
+    X_development, X_test, y_development, y_test = train_test_split(
         X, y, test_size=TEST_SIZE, random_state=42, stratify=y
     )
+    X_train, X_calib, y_train, y_calib = train_test_split(
+        X_development, y_development, test_size=CALIBRATION_SIZE,
+        random_state=43, stratify=y_development
+    )
+    print(f"Data split: train={len(X_train)}, calibration={len(X_calib)}, test={len(X_test)}")
 
-    # ---- Traditional ML models
+    # ---- Traditional ML models with sigmoid probability calibration
     tfidf = TfidfVectorizer(stop_words='english', max_df=MAX_DF)
     X_train_tfidf = tfidf.fit_transform(X_train)
+    X_calib_tfidf = tfidf.transform(X_calib)
     X_test_tfidf = tfidf.transform(X_test)
 
-    models = {
+    base_models = {
         "Logistic Regression": LogisticRegression(max_iter=LR_MAX_ITER),
         "Naive Bayes": MultinomialNB(),
         "Random Forest": RandomForestClassifier(n_estimators=RF_TREES, n_jobs=-1, random_state=42),
+        "Linear SVM": LinearSVC(random_state=42),
     }
+
+    # The calibration wrapper works with both models that have predict_proba
+    # and LinearSVC, which normally exposes decision scores instead.
+    models = {}
+    for name, base_model in base_models.items():
+        try:
+            calibrated_model = CalibratedClassifierCV(
+                estimator=base_model, method="sigmoid", cv=3
+            )
+        except TypeError:  # compatibility with older scikit-learn versions
+            calibrated_model = CalibratedClassifierCV(
+                base_estimator=base_model, method="sigmoid", cv=3
+            )
+        calibrated_model.fit(X_train_tfidf, y_train)
+        models[name] = calibrated_model
 
     results = {}
     for name, model in models.items():
-        model.fit(X_train_tfidf, y_train)
-        y_pred = model.predict(X_test_tfidf)
+        probabilities = model.predict_proba(X_test_tfidf)
+        fake_index = list(model.classes_).index(1)
+        fake_probs = probabilities[:, fake_index]
+        y_pred = (fake_probs >= 0.5).astype(int)
         acc = accuracy_score(y_test, y_pred)
         results[name] = acc
         print(f"\n{name} Accuracy: {acc:.4f}")
-        print(classification_report(y_test, y_pred))
+        print(classification_report(y_test, y_pred, zero_division=0))
+        print(f"Brier score: {brier_score_loss(y_test, fake_probs):.4f}")
+        print(f"Log loss: {log_loss(y_test, probabilities, labels=model.classes_):.4f}")
 
         key = name.lower().replace(" ", "_")
         mlflow.log_metrics({
             key + "_accuracy": acc,
-            key + "_precision": precision_score(y_test, y_pred),
-            key + "_recall": recall_score(y_test, y_pred),
-            key + "_f1": f1_score(y_test, y_pred),
+            key + "_precision": precision_score(y_test, y_pred, zero_division=0),
+            key + "_recall": recall_score(y_test, y_pred, zero_division=0),
+            key + "_f1": f1_score(y_test, y_pred, zero_division=0),
+            key + "_brier_score": brier_score_loss(y_test, fake_probs),
+            key + "_log_loss": log_loss(y_test, probabilities, labels=model.classes_),
         })
         save_confusion(y_test, y_pred, name)
 
-    # ---- LSTM
+    # ---- LSTM and a separate sigmoid calibrator for its output
     tokenizer = Tokenizer(num_words=MAX_WORDS)
     tokenizer.fit_on_texts(X_train)
     X_train_pad = pad_sequences(tokenizer.texts_to_sequences(X_train), maxlen=MAX_LEN)
+    X_calib_pad = pad_sequences(tokenizer.texts_to_sequences(X_calib), maxlen=MAX_LEN)
     X_test_pad = pad_sequences(tokenizer.texts_to_sequences(X_test), maxlen=MAX_LEN)
 
     lstm_model = Sequential([
@@ -168,17 +215,30 @@ def _train(csv_path, show_plots=True):
         epochs=LSTM_EPOCHS, batch_size=LSTM_BATCH, validation_split=0.1
     )
 
-    y_pred_lstm = (lstm_model.predict(X_test_pad) > 0.5).astype("int32")
+    # Fit the LSTM calibrator only on the separate calibration subset.
+    lstm_calib_raw = lstm_model.predict(X_calib_pad, verbose=0).reshape(-1, 1)
+    lstm_calibrator = LogisticRegression(max_iter=LR_MAX_ITER)
+    lstm_calibrator.fit(lstm_calib_raw, y_calib)
+
+    lstm_test_raw = lstm_model.predict(X_test_pad, verbose=0).reshape(-1, 1)
+    lstm_probabilities = lstm_calibrator.predict_proba(lstm_test_raw)
+    lstm_fake_index = list(lstm_calibrator.classes_).index(1)
+    lstm_fake_probs = lstm_probabilities[:, lstm_fake_index]
+    y_pred_lstm = (lstm_fake_probs >= 0.5).astype("int32")
     acc_lstm = accuracy_score(y_test, y_pred_lstm)
     results['LSTM'] = acc_lstm
-    print(f"\nLSTM Accuracy: {acc_lstm:.4f}")
-    print(classification_report(y_test, y_pred_lstm))
+    print(f"\nLSTM (calibrated) Accuracy: {acc_lstm:.4f}")
+    print(classification_report(y_test, y_pred_lstm, zero_division=0))
+    print(f"Brier score: {brier_score_loss(y_test, lstm_fake_probs):.4f}")
+    print(f"Log loss: {log_loss(y_test, lstm_probabilities, labels=lstm_calibrator.classes_):.4f}")
 
     mlflow.log_metrics({
         "lstm_accuracy": acc_lstm,
-        "lstm_precision": precision_score(y_test, y_pred_lstm),
-        "lstm_recall": recall_score(y_test, y_pred_lstm),
-        "lstm_f1": f1_score(y_test, y_pred_lstm),
+        "lstm_precision": precision_score(y_test, y_pred_lstm, zero_division=0),
+        "lstm_recall": recall_score(y_test, y_pred_lstm, zero_division=0),
+        "lstm_f1": f1_score(y_test, y_pred_lstm, zero_division=0),
+        "lstm_brier_score": brier_score_loss(y_test, lstm_fake_probs),
+        "lstm_log_loss": log_loss(y_test, lstm_probabilities, labels=lstm_calibrator.classes_),
     })
     for epoch, (tl, vl, ta, va) in enumerate(zip(history.history['loss'], history.history['val_loss'],
                                                  history.history['accuracy'], history.history['val_accuracy'])):
@@ -204,6 +264,7 @@ def _train(csv_path, show_plots=True):
     for name, model in models.items():
         joblib.dump(model, os.path.join(MODEL_DIR, name.replace(" ", "_") + ".joblib"), compress=3)
     lstm_model.save(os.path.join(MODEL_DIR, "lstm.keras"))
+    joblib.dump(lstm_calibrator, os.path.join(MODEL_DIR, "lstm_calibrator.joblib"), compress=3)
     with open(os.path.join(MODEL_DIR, "tokenizer.pkl"), "wb") as f:
         pickle.dump(tokenizer, f)
     with open(os.path.join(MODEL_DIR, "accuracies.pkl"), "wb") as f:
@@ -226,7 +287,7 @@ def load_artifacts():
         sys.exit("No saved models found. Run:  python FakeNewsDetection.py train --csv FakeNews.csv")
 
     ml_models = {}
-    for name in ["Logistic Regression", "Naive Bayes", "Random Forest"]:
+    for name in ["Logistic Regression", "Naive Bayes", "Random Forest", "Linear SVM"]:
         ml_models[name] = joblib.load(os.path.join(MODEL_DIR, name.replace(" ", "_") + ".joblib"))
     with open(os.path.join(MODEL_DIR, "tokenizer.pkl"), "rb") as f:
         tokenizer = pickle.load(f)
@@ -236,6 +297,7 @@ def load_artifacts():
         "ml": ml_models,
         "tokenizer": tokenizer,
         "lstm": load_model(os.path.join(MODEL_DIR, "lstm.keras")),
+        "lstm_calibrator": joblib.load(os.path.join(MODEL_DIR, "lstm_calibrator.joblib")),
     }
     return _artifacts
 
@@ -270,9 +332,15 @@ def find_suspicious_sentences(text, art):
     if scorable:
         cleaned = [clean_text(spans[i][2]) for i in scorable]
         vec = art["tfidf"].transform(cleaned)
-        probs = [model.predict_proba(vec)[:, 1] for model in art["ml"].values()]
+        probs = []
+        for model in art["ml"].values():
+            fake_index = list(model.classes_).index(1)
+            probs.append(model.predict_proba(vec)[:, fake_index])
         seq = pad_sequences(art["tokenizer"].texts_to_sequences(cleaned), maxlen=MAX_LEN)
-        probs.append(art["lstm"].predict(seq, verbose=0).reshape(-1))
+        lstm_raw = art["lstm"].predict(seq, verbose=0).reshape(-1, 1)
+        lstm_fake_index = list(art["lstm_calibrator"].classes_).index(1)
+        lstm_probs = art["lstm_calibrator"].predict_proba(lstm_raw)[:, lstm_fake_index]
+        probs.append(lstm_probs)
         avg = np.mean(probs, axis=0)
         scores = {idx: float(p) for idx, p in zip(scorable, avg)}
 
@@ -324,12 +392,17 @@ def predict_fakeness(text, page_host=None, page_protocol=None):
     vec = art["tfidf"].transform([cleaned])
     per_model = {}
     for name, model in art["ml"].items():
-        per_model[name] = float(model.predict_proba(vec)[0][1])   # P(class 1 = fake)
+        fake_index = list(model.classes_).index(1)
+        per_model[name] = float(model.predict_proba(vec)[0][fake_index])
 
     seq = pad_sequences(art["tokenizer"].texts_to_sequences([cleaned]), maxlen=MAX_LEN)
-    per_model["LSTM"] = float(art["lstm"].predict(seq, verbose=0)[0][0])
+    lstm_raw = art["lstm"].predict(seq, verbose=0).reshape(-1, 1)
+    lstm_fake_index = list(art["lstm_calibrator"].classes_).index(1)
+    per_model["LSTM"] = float(
+        art["lstm_calibrator"].predict_proba(lstm_raw)[0][lstm_fake_index]
+    )
 
-    fake_prob = float(np.mean(list(per_model.values())))   # average of the 4 models
+    fake_prob = float(np.mean(list(per_model.values())))   # average of calibrated model scores
     style_percent = round(fake_prob * 100, 1)               # signal 1: writing style only
 
     source = verify_source(page_host, page_protocol)        # signal 2: website

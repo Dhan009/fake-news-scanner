@@ -1,0 +1,21 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1791838192.358423    1020 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1791838195.000703    1020 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+I0000 00:00:1791838203.237050    1020 cpu_feature_guard.cc:227] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: SSE3 SSE4.1 SSE4.2 AVX AVX2 AVX_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+Testing 2000 real articles from News_Articles_Indian_Express.csv
+
+Share of these REAL articles wrongly called fake (false-positive rate):
+
+Model                   Called fake  Correct (real)
+Logistic Regression           5.10%          94.90%
+Naive Bayes                  10.50%          89.50%
+Random Forest                 9.05%          90.95%
+LSTM                         14.50%          85.50%
+
+Average style score (what the extension shows as 'x% fake-like'): mean 19.8%, median 14.1%
+Articles with style score >= 70% (would read as fake-like): 1.50%
+Articles with style score < 40% (read as real-like): 87.35%
+
+All articles here are real, so accuracy on this set = 100% - 'Called fake'.

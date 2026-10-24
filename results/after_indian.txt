@@ -1,0 +1,18 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1791838151.962849   31360 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1791838154.786696   31360 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+I0000 00:00:1791838159.879093   31360 cpu_feature_guard.cc:227] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: SSE3 SSE4.1 SSE4.2 AVX AVX2 AVX_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+
+Results on 7328 Indian articles never used for training (1 = fake):
+
+Model                   Accuracy  Precision   Recall      F1
+Logistic Regression       0.9203     0.9481   0.8905  0.9184
+                       TN=3459 FP=180 FN=404 TP=3285
+Naive Bayes               0.8841     0.8745   0.8989  0.8865
+                       TN=3163 FP=476 FN=373 TP=3316
+Random Forest             0.9311     0.9472   0.9141  0.9303
+                       TN=3451 FP=188 FN=317 TP=3372
+LSTM                      0.9337     0.9438   0.9233  0.9334
+                       TN=3436 FP=203 FN=283 TP=3406
